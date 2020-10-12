@@ -271,6 +271,21 @@ class MethodDecoratorTests(SimpleTestCase):
                 self.assertEqual(Test.method.__doc__, 'A method')
                 self.assertEqual(Test.method.__name__, 'method')
 
+    def test_new_attribute(self):
+        """A decorator that sets a new attribute on the method."""
+        def decorate(func):
+            func.x = 1
+            return func
+
+        class MyClass:
+            @method_decorator(decorate)
+            def method(self):
+                return True
+
+        obj = MyClass()
+        self.assertEqual(obj.method.x, 1)
+        self.assertIs(obj.method(), True)
+
     def test_bad_iterable(self):
         decorators = {myattr_dec_m, myattr2_dec_m}
         msg = "'set' object is not subscriptable"
@@ -423,7 +438,7 @@ class XFrameOptionsDecoratorsTests(TestCase):
         def a_view(request):
             return HttpResponse()
         r = a_view(HttpRequest())
-        self.assertEqual(r['X-Frame-Options'], 'DENY')
+        self.assertEqual(r.headers['X-Frame-Options'], 'DENY')
 
     def test_sameorigin_decorator(self):
         """
@@ -434,7 +449,7 @@ class XFrameOptionsDecoratorsTests(TestCase):
         def a_view(request):
             return HttpResponse()
         r = a_view(HttpRequest())
-        self.assertEqual(r['X-Frame-Options'], 'SAMEORIGIN')
+        self.assertEqual(r.headers['X-Frame-Options'], 'SAMEORIGIN')
 
     def test_exempt_decorator(self):
         """
@@ -451,7 +466,7 @@ class XFrameOptionsDecoratorsTests(TestCase):
 
         # Since the real purpose of the exempt decorator is to suppress
         # the middleware's functionality, let's make sure it actually works...
-        r = XFrameOptionsMiddleware().process_response(req, resp)
+        r = XFrameOptionsMiddleware(a_view)(req)
         self.assertIsNone(r.get('X-Frame-Options', None))
 
 
@@ -462,6 +477,6 @@ class NeverCacheDecoratorTest(TestCase):
             return HttpResponse()
         r = a_view(HttpRequest())
         self.assertEqual(
-            set(r['Cache-Control'].split(', ')),
-            {'max-age=0', 'no-cache', 'no-store', 'must-revalidate'},
+            set(r.headers['Cache-Control'].split(', ')),
+            {'max-age=0', 'no-cache', 'no-store', 'must-revalidate', 'private'},
         )

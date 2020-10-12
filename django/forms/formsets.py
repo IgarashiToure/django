@@ -2,7 +2,7 @@ from django.core.exceptions import ValidationError
 from django.forms import Form
 from django.forms.fields import BooleanField, IntegerField
 from django.forms.utils import ErrorList
-from django.forms.widgets import HiddenInput
+from django.forms.widgets import HiddenInput, NumberInput
 from django.utils.functional import cached_property
 from django.utils.html import html_safe
 from django.utils.safestring import mark_safe
@@ -47,6 +47,8 @@ class BaseFormSet:
     """
     A collection of instances of the same Form class.
     """
+    ordering_widget = NumberInput
+
     def __init__(self, data=None, files=None, auto_id='id_%s', prefix=None,
                  initial=None, error_class=ErrorList, form_kwargs=None):
         self.is_bound = data is not None or files is not None
@@ -132,9 +134,10 @@ class BaseFormSet:
     def forms(self):
         """Instantiate forms at first property access."""
         # DoS protection is included in total_form_count()
-        forms = [self._construct_form(i, **self.get_form_kwargs(i))
-                 for i in range(self.total_form_count())]
-        return forms
+        return [
+            self._construct_form(i, **self.get_form_kwargs(i))
+            for i in range(self.total_form_count())
+        ]
 
     def get_form_kwargs(self, index):
         """
@@ -264,6 +267,10 @@ class BaseFormSet:
     def get_default_prefix(cls):
         return 'form'
 
+    @classmethod
+    def get_ordering_widget(cls):
+        return cls.ordering_widget
+
     def non_form_errors(self):
         """
         Return an ErrorList of errors that aren't associated with a particular
@@ -335,15 +342,15 @@ class BaseFormSet:
                     self.total_form_count() - len(self.deleted_forms) > self.max_num) or \
                     self.management_form.cleaned_data[TOTAL_FORM_COUNT] > self.absolute_max:
                 raise ValidationError(ngettext(
-                    "Please submit %d or fewer forms.",
-                    "Please submit %d or fewer forms.", self.max_num) % self.max_num,
+                    "Please submit at most %d form.",
+                    "Please submit at most %d forms.", self.max_num) % self.max_num,
                     code='too_many_forms',
                 )
             if (self.validate_min and
                     self.total_form_count() - len(self.deleted_forms) - empty_forms_count < self.min_num):
                 raise ValidationError(ngettext(
-                    "Please submit %d or more forms.",
-                    "Please submit %d or more forms.", self.min_num) % self.min_num,
+                    "Please submit at least %d form.",
+                    "Please submit at least %d forms.", self.min_num) % self.min_num,
                     code='too_few_forms')
             # Give self.clean() a chance to do cross-form validation.
             self.clean()
@@ -365,13 +372,23 @@ class BaseFormSet:
 
     def add_fields(self, form, index):
         """A hook for adding extra fields on to each form instance."""
+        initial_form_count = self.initial_form_count()
         if self.can_order:
             # Only pre-fill the ordering field for initial forms.
-            if index is not None and index < self.initial_form_count():
-                form.fields[ORDERING_FIELD_NAME] = IntegerField(label=_('Order'), initial=index + 1, required=False)
+            if index is not None and index < initial_form_count:
+                form.fields[ORDERING_FIELD_NAME] = IntegerField(
+                    label=_('Order'),
+                    initial=index + 1,
+                    required=False,
+                    widget=self.get_ordering_widget(),
+                )
             else:
-                form.fields[ORDERING_FIELD_NAME] = IntegerField(label=_('Order'), required=False)
-        if self.can_delete:
+                form.fields[ORDERING_FIELD_NAME] = IntegerField(
+                    label=_('Order'),
+                    required=False,
+                    widget=self.get_ordering_widget(),
+                )
+        if self.can_delete and (self.can_delete_extra or index < initial_form_count):
             form.fields[DELETION_FIELD_NAME] = BooleanField(label=_('Delete'), required=False)
 
     def add_prefix(self, index):
@@ -417,21 +434,34 @@ class BaseFormSet:
 
 def formset_factory(form, formset=BaseFormSet, extra=1, can_order=False,
                     can_delete=False, max_num=None, validate_max=False,
-                    min_num=None, validate_min=False):
+                    min_num=None, validate_min=False, absolute_max=None,
+                    can_delete_extra=True):
     """Return a FormSet for the given form class."""
     if min_num is None:
         min_num = DEFAULT_MIN_NUM
     if max_num is None:
         max_num = DEFAULT_MAX_NUM
-    # hard limit on forms instantiated, to prevent memory-exhaustion attacks
-    # limit is simply max_num + DEFAULT_MAX_NUM (which is 2*DEFAULT_MAX_NUM
-    # if max_num is None in the first place)
-    absolute_max = max_num + DEFAULT_MAX_NUM
-    attrs = {'form': form, 'extra': extra,
-             'can_order': can_order, 'can_delete': can_delete,
-             'min_num': min_num, 'max_num': max_num,
-             'absolute_max': absolute_max, 'validate_min': validate_min,
-             'validate_max': validate_max}
+    # absolute_max is a hard limit on forms instantiated, to prevent
+    # memory-exhaustion attacks. Default to max_num + DEFAULT_MAX_NUM
+    # (which is 2 * DEFAULT_MAX_NUM if max_num is None in the first place).
+    if absolute_max is None:
+        absolute_max = max_num + DEFAULT_MAX_NUM
+    if max_num > absolute_max:
+        raise ValueError(
+            "'absolute_max' must be greater or equal to 'max_num'."
+        )
+    attrs = {
+        'form': form,
+        'extra': extra,
+        'can_order': can_order,
+        'can_delete': can_delete,
+        'can_delete_extra': can_delete_extra,
+        'min_num': min_num,
+        'max_num': max_num,
+        'absolute_max': absolute_max,
+        'validate_min': validate_min,
+        'validate_max': validate_max,
+    }
     return type(form.__name__ + 'FormSet', (formset,), attrs)
 
 
